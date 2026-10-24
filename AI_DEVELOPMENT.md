@@ -53,7 +53,7 @@
 ## 项目与宿主
 
 - 插件 ID：`com.snow.hecatebattery`
-- 当前插件版本：`1.1.0`
+- 当前插件版本：`1.2.0`
 - 目标框架：`net10.0-windows10.0.19041.0`（必须与宿主一致）
 - 插件入口：`NPS.HecateBattery.HecateBatteryPlugin`（public，实现 `INotchPlugin`）
 - 宿主 API 命名空间：`NotchPeninsula.Plugins`；字体与日志在 `NotchPeninsula`（`FontConfig` / `Logger`，非冻结契约，全部 try/catch 包裹）
@@ -76,14 +76,15 @@
 NPS.HecateBattery/
 ├── NPS.HecateBattery.csproj
 ├── src/
-│   ├── HecateBatteryPlugin.cs        # 插件入口：注册、轮询调度、提醒、生命周期
+│   ├── HecateBatteryPlugin.cs        # 插件入口：注册、轮询调度、提醒、样式切换、生命周期
 │   ├── Core/BatterySnapshot.cs       # LinkState + 不可变电量快照
+│   ├── Core/PluginSettings.cs        # WidgetStyle 枚举 + %APPDATA% 设置持久化
 │   ├── Hardware/NativeMethods.cs     # Win32 P/Invoke（kernel32/setupapi/hid）
 │   ├── Hardware/HecateHid.cs         # HID 枚举、查询、回包解析（协议实现）
 │   ├── Rendering/PluginFont.cs       # 从宿主 FontConfig 取字体（不缓存、不 Dispose）
 │   └── UI/
-│       ├── HecateWidget.cs           # 灵动岛折叠态组件（电池图标 + 百分比）
-│       └── HecateDetailPage.cs       # 右键详情页（340×132 设计坐标）
+│       ├── HecateWidget.cs           # 灵动岛折叠态组件（耳机剪影 + 电池，三种样式）
+│       └── HecateDetailPage.cs       # 右键详情页（340×148 设计坐标，含样式切换）
 ├── docs/
 │   └── G3MAX_BATTERY_PROTOCOL.md     # 通用 G3MAX 电量获取协议说明（不绑定本项目）
 ├── releases/
@@ -96,7 +97,7 @@ NPS.HecateBattery/
 
 ### `src/HecateBatteryPlugin.cs`
 
-实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 只做三件事：注册组件、挂 `ScheduleRefresh(30s)` 定时器、投递一次初始轮询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。轮询用 `Interlocked` 门闩防重入；轮询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。
+实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 只做四件事：读回持久化样式、注册组件、挂 `ScheduleRefresh(30s)` 定时器、投递一次初始轮询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。轮询用 `Interlocked` 门闩防重入；轮询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。`SetWidgetStyle` 处理详情页的样式切换：写持久化 + `InvalidateWidgetLayout`，样式不变时直接返回。
 
 失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`MeasureWidth` 返回 0，宿主不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一轮轮询（≤ 30 s）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 30 秒刷屏。
 
@@ -105,6 +106,10 @@ NPS.HecateBattery/
 ### `src/Core/BatterySnapshot.cs`
 
 `LinkState`（Reading/Ok/Offline/Disconnected/Error；`Offline` = 收到合法离线帧、耳机关机/超出范围，组件自动隐藏）与 `BatterySnapshot(Level, State, UpdatedUtcTicks)` record。跨线程只传不可变快照，绘制层不加锁。
+
+### `src/Core/PluginSettings.cs`
+
+`WidgetStyle` 枚举（Classic / Capsule / Minimal）与 `SettingsStore`。宿主 v2.0.2 没有插件存储 API，样式持久化落到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`（System.Text.Json 单字段，读写全部 try/catch，任何异常回落默认 Classic，绝不影响电量显示）。`Load` 只在 `Initialize` 调一次，`Save` 只在样式实际变化时调。
 
 ### `src/Hardware/NativeMethods.cs` 与 `src/Hardware/HecateHid.cs`
 
@@ -122,9 +127,11 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 
 ### `src/UI/HecateWidget.cs` 与 `src/UI/HecateDetailPage.cs`
 
-折叠态组件约 50–60 px 宽（图标 15×9 + 文字 12.5 px SemiBold）；电量 ≤ 20% 用警示红 `#F05A5A`；耳机关机/超出范围（`Offline`）时 `MeasureWidth` 返回 0、`Draw` 直接返回，宿主据此自动隐藏组件（不占宽、不绘制、不可命中），开机重连后自动恢复；接收器异常显示灰色 `--`；左键触发一次手动刷新（线程池，不阻塞渲染），右键由宿主展开详情页。
+折叠态组件约 50–60 px 宽，造型为「左侧耳机剪影 + 右侧电池、数字内嵌电池内部」（宿主无 emoji 字体，耳机用 SkiaSharp 路径绘制剪影），组件宽度恒定、数字超宽（如 `100%`）时等比缩小，不随数字抖动。组件有三种样式（`WidgetStyle`）：**Classic**（白描边电池 + 进度填充）、**Capsule**（强调色 `#56C8FF` 胶囊描边 + 内衬染色）、**Minimal**（常态 55% 线框 + 92% 数字的低调细框，低电量恢复全亮度；耳机剪影同步改为线条描边）。切换链路：详情页 `OnAction("style.*")` → `SetWidgetStyle`（持久化 + `InvalidateWidgetLayout`）。
 
-详情页按固定设计坐标 340×132 排版，绘制时按 `rect` 等比缩放——宿主展开动画期间 `rect` 是插值尺寸，不能拿它当排版基准。`MeasureWidth` 返回值被宿主缓存，任何影响文字宽度的状态变化（`96%` → `100%`、Ok → `--`）都必须触发 `InvalidateWidgetLayout`。
+电量 ≤ 20% 用警示红 `#F05A5A`；耳机关机/超出范围（`Offline`）时 `MeasureWidth` 返回 0、`Draw` 直接返回，宿主据此自动隐藏组件（不占宽、不绘制、不可命中），开机重连后自动恢复；接收器异常显示灰色 `--`；左键触发一次手动刷新（线程池，不阻塞渲染），右键由宿主展开详情页。
+
+详情页按固定设计坐标 340×148 排版，绘制时按 `rect` 等比缩放——宿主展开动画期间 `rect` 是插值尺寸，不能拿它当排版基准。详情页右上角「刷新」按钮、底部「组件样式」三按钮（命中值 `style.classic` / `style.capsule` / `style.minimal`，选中态高亮描边）。`MeasureWidth` 返回值被宿主缓存，任何影响文字宽度的状态变化（`96%` → `100%`、Ok → `--`、样式切换）都必须触发 `InvalidateWidgetLayout`。
 
 ## 线程与生命周期约定
 

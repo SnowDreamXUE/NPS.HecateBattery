@@ -1,5 +1,10 @@
 // HecateWidget.cs
-// 折叠态组件：电池图标（外框 + 小帽 + 按电量填充）+ 百分比文字。
+// 折叠态组件：左侧耳机剪影 + 右侧电池，电量数字嵌在电池内部。
+// 三种样式（右键详情页可切换，见 HecateDetailPage）：
+//   Classic 方案 A · 经典描边 —— 描边电池 + 电量进度填充 + 常规数字；
+//   Capsule 方案 B · 彩色胶囊 —— 强调色胶囊电池 + 加粗同色数字，无进度填充；
+//   Minimal 方案 C · 极简细框 —— 线条耳机 + 细边框电池，无填充，最轻量。
+// 电量 ≤ 20% 或未连接时按既有规则变色/置灰；关机(Offline)整组件隐藏。
 // 只读不可变快照并绘制；宽度变化后由插件调用 InvalidateWidgetLayout 触发宿主重测。
 using System;
 using NotchPeninsula.Plugins;
@@ -9,11 +14,13 @@ namespace NPS.HecateBattery;
 
 internal sealed class HecateWidget : IWidget
 {
-    private const float IconBlock = 18f;
-    private const float Gap = 5f;
-    private const float TextSize = 12.5f;
     private const float LeftPad = 1f;
+    private const float HeadsetW = 15f;   // 耳机剪影宽
+    private const float Gap = 5f;         // 耳机与电池间距
+    private const float BodyH = 12.5f;    // 电池主体高（方案 A/B；C 为 11.5）
+    private const float CapBlock = 2.8f;  // 电池小帽区（三种样式统一：帽宽 + 间隙）
     private const float RightPad = 1f;
+    private const float Inset = 1.9f;     // 电池内部留白（数字与填充的内边界）
 
     private readonly HecateBatteryPlugin _plugin;
     private readonly HecateDetailPage _detail;
@@ -28,23 +35,15 @@ internal sealed class HecateWidget : IWidget
     public string DisplayName => "HECATE 电量";
     public IDetailPage? DetailPage => _detail;
 
-    private string CurrentText()
-    {
-        BatterySnapshot s = _plugin.Snapshot;
-        return s.State == LinkState.Ok ? s.Level + "%" : "--";
-    }
-
     public float MeasureWidth(float availableHeight)
     {
         // 耳机已关机/超出范围：宽度返回 0，宿主不分配空间、不绘制、不注册命中区（自动隐藏）。
         // 开机重连后轮询刷新快照并触发 InvalidateWidgetLayout，组件自动恢复显示。
         if (_plugin.Snapshot.State == LinkState.Offline) return 0f;
 
-        using var paint = new SKPaint { IsAntialias = true, TextSize = TextSize };
-        SKTypeface? face = PluginFont.SemiBold();
-        if (face != null) paint.Typeface = face;
-
-        return LeftPad + IconBlock + Gap + paint.MeasureText(CurrentText()) + RightPad;
+        // "100%" 靠数字自适应缩放放进电池，因此各样式宽度恒定，不随电量抖动。
+        float bodyW = _plugin.Style == WidgetStyle.Minimal ? 22.5f : 24f;
+        return LeftPad + HeadsetW + Gap + bodyW + CapBlock + RightPad;
     }
 
     public void Draw(SKCanvas canvas, SKRect rect, WidgetFrame frame)
@@ -54,65 +53,211 @@ internal sealed class HecateWidget : IWidget
         BatterySnapshot s = _plugin.Snapshot;
         if (s.State == LinkState.Offline) return; // 宿主宽度缓存刷新前的过渡帧，不画
 
-        string text = s.State == LinkState.Ok ? s.Level + "%" : "--";
+        bool ok = s.State == LinkState.Ok;
+        bool low = ok && s.Level <= 20;
+        string text = ok ? s.Level + "%" : "--";
 
-        SKColor color = s.State == LinkState.Ok
-            ? (s.Level <= 20 ? HecateBatteryPlugin.WarningColor : frame.Theme.TextColor)
-            : frame.Theme.SubTextColor;
-        color = color.WithAlpha(frame.Alpha);
-
+        SKColor glyphColor = ColorFor(ok, low, frame).WithAlpha(frame.Alpha);
         float cy = rect.MidY + frame.TextOffsetY;
         float left = rect.Left + LeftPad;
-        const float bodyW = 15f;
-        const float bodyH = 9f;
-        float top = cy - bodyH / 2f;
-        var body = new SKRect(left, top, left + bodyW, top + bodyH);
 
+        DrawHeadset(canvas, left, cy, glyphColor, outline: _plugin.Style == WidgetStyle.Minimal);
+
+        float bx = left + HeadsetW + Gap;
+        switch (_plugin.Style)
+        {
+            case WidgetStyle.Capsule:
+                DrawCapsuleBattery(canvas, bx, cy, ok, s.Level, text, frame);
+                break;
+            case WidgetStyle.Minimal:
+                DrawMinimalBattery(canvas, bx, cy, ok, s.Level, text, frame);
+                break;
+            default:
+                DrawClassicBattery(canvas, bx, cy, ok, s.Level, text, frame);
+                break;
+        }
+    }
+
+    private static SKColor ColorFor(bool ok, bool low, WidgetFrame frame) => ok
+        ? (low ? HecateBatteryPlugin.WarningColor : frame.Theme.TextColor)
+        : frame.Theme.SubTextColor;
+
+    /// <summary>耳机剪影：头梁半圆弧 + 左右耳罩，局部宽 15、高约 11.4，相对 cy 垂直居中。</summary>
+    private static void DrawHeadset(SKCanvas canvas, float left, float cy, SKColor color, bool outline)
+    {
+        float top = cy - 7.2f;
+
+        using (var band = new SKPath())
+        {
+            // 头梁：上半圆弧，圆心 (left+7.5, top+6.8)，半径 5.3
+            band.ArcTo(
+                new SKRect(left + 2.2f, top + 1.5f, left + 12.8f, top + 12.1f),
+                180f, 180f, false);
+
+            using var stroke = new SKPaint
+            {
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = outline ? 1.4f : 1.7f,
+                StrokeCap = SKStrokeCap.Round,
+                Color = color,
+            };
+            canvas.DrawPath(band, stroke);
+        }
+
+        if (outline)
+        {
+            // 线条耳罩：细描边、不填充
+            using var cupStroke = new SKPaint
+            {
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 1.3f,
+                Color = color,
+            };
+            canvas.DrawRoundRect(left + 0.9f, top + 6.8f, 3.2f, 6f, 1.4f, 1.4f, cupStroke);
+            canvas.DrawRoundRect(left + 10.9f, top + 6.8f, 3.2f, 6f, 1.4f, 1.4f, cupStroke);
+        }
+        else
+        {
+            using var cup = new SKPaint { IsAntialias = true, Color = color };
+            canvas.DrawRoundRect(left + 0.4f, top + 6.3f, 3.7f, 6.6f, 1.7f, 1.7f, cup);
+            canvas.DrawRoundRect(left + 10.9f, top + 6.3f, 3.7f, 6.6f, 1.7f, 1.7f, cup);
+        }
+    }
+
+    /// <summary>方案 A · 经典描边：描边电池 + 电量进度填充，数字嵌在电池内部。</summary>
+    private static void DrawClassicBattery(
+        SKCanvas canvas, float bx, float cy, bool ok, int level, string text, WidgetFrame frame)
+    {
+        const float bodyW = 24f;
+        SKColor main = ColorFor(ok, ok && level <= 20, frame).WithAlpha(frame.Alpha);
+        SKColor fillTint = main.WithAlpha((byte)(frame.Alpha * 0.26f));
+        var body = new SKRect(bx, cy - BodyH / 2f, bx + bodyW, cy + BodyH / 2f);
+
+        using (var fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = main })
+        using (var tint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = fillTint })
         using (var stroke = new SKPaint
         {
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
             StrokeWidth = 1.2f,
-            Color = color,
-        })
-        using (var fill = new SKPaint
-        {
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill,
-            Color = color,
+            Color = main,
         })
         {
-            canvas.DrawRoundRect(body, 2.2f, 2.2f, stroke);
-
-            var cap = new SKRect(body.Right + 1.2f, cy - 2f, body.Right + 2.6f, cy + 2f);
-            canvas.DrawRoundRect(cap, 0.8f, 0.8f, fill);
-
-            if (s.State == LinkState.Ok && s.Level > 0)
+            if (ok) // 电量进度填充
             {
-                const float pad = 2f;
-                float innerW = (bodyW - pad * 2f) * Math.Clamp(s.Level / 100f, 0f, 1f);
-                if (innerW > 0.4f)
+                float w = (bodyW - Inset * 2f) * Math.Clamp(level / 100f, 0f, 1f);
+                if (w > 0.4f)
                 {
-                    var inner = new SKRect(
-                        body.Left + pad,
-                        body.Top + pad,
-                        body.Left + pad + innerW,
-                        body.Bottom - pad);
-                    canvas.DrawRoundRect(inner, 1.2f, 1.2f, fill);
+                    canvas.DrawRoundRect(
+                        new SKRect(body.Left + Inset, body.Top + Inset, body.Left + Inset + w, body.Bottom - Inset),
+                        2f, 2f, tint);
                 }
             }
+
+            canvas.DrawRoundRect(body, 3.2f, 3.2f, stroke);
+            canvas.DrawRoundRect(body.Right + 0.7f, cy - 2.35f, 2.1f, 4.7f, 1f, 1f, fill);
         }
 
-        using var textPaint = new SKPaint
+        DrawBatteryText(canvas, bx + bodyW / 2f, cy, bodyW, text, 8.6f, main, fakeBold: false);
+    }
+
+    /// <summary>方案 B · 彩色胶囊：强调色胶囊电池，无进度填充，数字加粗同色。</summary>
+    private static void DrawCapsuleBattery(
+        SKCanvas canvas, float bx, float cy, bool ok, int level, string text, WidgetFrame frame)
+    {
+        const float bodyW = 24f;
+        SKColor accent = (ok
+                ? (level <= 20 ? HecateBatteryPlugin.WarningColor : HecateBatteryPlugin.AccentColor)
+                : frame.Theme.SubTextColor)
+            .WithAlpha(frame.Alpha);
+        SKColor innerTint = accent.WithAlpha((byte)(frame.Alpha * 0.20f));
+        var body = new SKRect(bx, cy - BodyH / 2f, bx + bodyW, cy + BodyH / 2f);
+        var inner = new SKRect(bx + 2.2f, body.Top + 2.2f, body.Right - 2.2f, body.Bottom - 2.2f);
+
+        using (var tint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = innerTint })
+        {
+            canvas.DrawRoundRect(inner, 4.05f, 4.05f, tint);
+        }
+
+        using (var stroke = new SKPaint
         {
             IsAntialias = true,
-            TextSize = TextSize,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.6f,
+            Color = accent,
+        })
+        {
+            canvas.DrawRoundRect(body, 5.45f, 5.45f, stroke);
+        }
+
+        using (var fill = new SKPaint { IsAntialias = true, Color = accent })
+        {
+            canvas.DrawRoundRect(body.Right + 0.7f, cy - 2.45f, 2.1f, 4.9f, 1.1f, 1.1f, fill);
+        }
+
+        DrawBatteryText(canvas, bx + bodyW / 2f, cy, bodyW, text, 9f, accent, fakeBold: true);
+    }
+
+    /// <summary>方案 C · 极简细框：细边框电池，无填充，数字浅色低调（低电量转红）。</summary>
+    private static void DrawMinimalBattery(
+        SKCanvas canvas, float bx, float cy, bool ok, int level, string text, WidgetFrame frame)
+    {
+        const float bodyW = 22.5f;
+        const float bodyH = 11.5f;
+        bool low = ok && level <= 20;
+        SKColor main = ColorFor(ok, low, frame);
+
+        // 常态 55% 线框 + 92% 数字保持低调；低电量线框/数字全透明度保住警示力
+        SKColor edge = main.WithAlpha((byte)(frame.Alpha * (low ? 1f : 0.55f)));
+        SKColor number = main.WithAlpha((byte)(frame.Alpha * (low ? 1f : 0.92f)));
+        var body = new SKRect(bx, cy - bodyH / 2f, bx + bodyW, cy + bodyH / 2f);
+
+        using (var stroke = new SKPaint
+        {
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 0.9f,
+            Color = edge,
+        })
+        {
+            canvas.DrawRoundRect(body, 2.6f, 2.6f, stroke);
+        }
+
+        using (var fill = new SKPaint { IsAntialias = true, Color = edge })
+        {
+            canvas.DrawRoundRect(body.Right + 0.9f, cy - 2.15f, 1.9f, 4.3f, 0.9f, 0.9f, fill);
+        }
+
+        DrawBatteryText(canvas, bx + bodyW / 2f, cy, bodyW, text, 8.6f, number, fakeBold: false);
+    }
+
+    /// <summary>电池内嵌数字：先按基准字号测量，超出电池内宽就等比缩小（保证 "100%" 也放得下）。</summary>
+    private static void DrawBatteryText(
+        SKCanvas canvas, float centerX, float cy, float bodyW, string text, float size, SKColor color, bool fakeBold)
+    {
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+            TextSize = size,
             Color = color,
+            FakeBoldText = fakeBold,
         };
         SKTypeface? face = PluginFont.SemiBold();
-        if (face != null) textPaint.Typeface = face;
+        if (face != null) paint.Typeface = face;
 
-        canvas.DrawText(text, left + IconBlock + Gap, cy + 4.5f, textPaint);
+        float inner = bodyW - Inset * 2f;
+        float w = paint.MeasureText(text);
+        if (w > inner)
+        {
+            paint.TextSize = size * inner / w;
+            w = paint.MeasureText(text);
+        }
+
+        SKFontMetrics m = paint.FontMetrics;
+        float baseline = cy - (m.Ascent + m.Descent) / 2f;
+        canvas.DrawText(text, centerX - w / 2f, baseline, paint);
     }
 
     public WidgetHit HitTest(float x, float y, SKRect rect)
