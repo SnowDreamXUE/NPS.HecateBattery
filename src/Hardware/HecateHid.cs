@@ -28,15 +28,16 @@ internal sealed class HecateHid
     private string? _cachedPath;
     private byte _cachedRid;
 
-    /// <summary>成功返回 0..100；-1 = 设备不存在；-2 = 设备存在但无有效回包。</summary>
+    /// <summary>耳机在线返回 0..100；-1 = 接收器不存在；-2 = 接收器存在但无有效回包；
+    /// -3 = 收到合法状态帧但 byte[5] == 0x00（耳机已关机/超出 2.4G 范围）。</summary>
     public int Poll(out bool devicePresent)
     {
         devicePresent = false;
 
-        if (_cachedPath != null && TryPoll(_cachedPath, _cachedRid, out int cachedLevel))
+        if (_cachedPath != null && TryPoll(_cachedPath, _cachedRid, out int cachedLevel, out bool cachedOnline))
         {
             devicePresent = true;
-            return cachedLevel;
+            return cachedOnline ? cachedLevel : -3;
         }
         _cachedPath = null;
 
@@ -49,20 +50,22 @@ internal sealed class HecateHid
 
             devicePresent = true;
             byte rid = RidForPath(path);
-            if (TryPoll(path, rid, out int level))
+            if (TryPoll(path, rid, out int level, out bool online))
             {
+                // 离线帧同样缓存路径：接收器工作正常，下一轮直接命中，开机后无需重新枚举。
                 _cachedPath = path;
                 _cachedRid = rid;
-                return level;
+                return online ? level : -3;
             }
         }
 
         return -2;
     }
 
-    private static bool TryPoll(string path, byte rid, out int level)
+    private static bool TryPoll(string path, byte rid, out int level, out bool online)
     {
         level = 0;
+        online = false;
 
         // 读（overlapped）与写（同步）各开一个句柄；每次轮询结束都关闭，不长期占用设备。
         IntPtr readHandle = Native.CreateFileW(
@@ -127,14 +130,10 @@ internal sealed class HecateHid
                     int got = ReadReport(readHandle, readEvent, report, Math.Min(remain, ReadSliceMs));
                     if (got <= 0) continue;
 
-                    // 严格校验：RID 回显 + 魔法 35 BB + op 0x0A + 电量 0..100。
-                    if (report[0] != rid || report[1] != 0x35 || report[2] != 0xBB) continue;
-                    if (report[3] != 0x0A) continue;
-
-                    int value = report[6];
-                    if (value > 100) continue;
+                    if (!TryParseStatusReport(report, rid, out int value, out bool linked)) continue;
 
                     level = value;
+                    online = linked;
                     return true;
                 }
             }
@@ -147,6 +146,32 @@ internal sealed class HecateHid
             Native.CloseHandle(readHandle);
             Native.CloseHandle(writeHandle);
         }
+    }
+
+    /// <summary>
+    /// 校验并解析 op=0x0A 状态帧。online = 耳机链路是否在线；离线帧的 level 无意义，调用方必须忽略。
+    /// </summary>
+    internal static bool TryParseStatusReport(byte[] report, byte rid, out int level, out bool online)
+    {
+        level = 0;
+        online = false;
+
+        // 严格校验：RID 回显 + 魔法 35 BB + op 0x0A + 链路标志 + 电量 0..100。
+        if (report[0] != rid || report[1] != 0x35 || report[2] != 0xBB) return false;
+        if (report[3] != 0x0A) return false;
+
+        // report[5] 是链路标志：0x01 = 耳机在线（此时 report[6] 才是电量），
+        // 0x00 = 耳机已关机/超出 2.4G 范围（此时 report[6] 恒为 0，不是 0% 电量，必须忽略）。
+        // 关机时接收器仍然回包，绝不能以「有没有回包 / byte[6]==0」判断连接。
+        byte link = report[5];
+        if (link != 0x00 && link != 0x01) return false;
+
+        int value = report[6];
+        if (value > 100) return false;
+
+        online = link == 0x01;
+        level = online ? value : 0;
+        return true;
     }
 
     private static int ReadReport(IntPtr handle, IntPtr readEvent, byte[] buffer, int timeoutMs)
