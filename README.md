@@ -1,16 +1,17 @@
 # NPS.HecateBattery
 
-NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.1.0**，插件 ID 为 `com.snow.hecatebattery`。
+NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.2.0**，插件 ID 为 `com.snow.hecatebattery`。
 
 ## 功能
 
-- 岛上组件显示电池图标 + 电量百分比；电量 ≤ 20% 变警示红。
+- 岛上组件为「左侧耳机剪影 + 右侧电池」造型，电量数字显示在电池内部；电量 ≤ 20% 变警示红。
+- 组件提供三种可选样式：**经典描边**、**彩色胶囊**、**极简细框**，在详情页「组件样式」区一键切换，选择持久化到 `%APPDATA%`，重启后保留。
 - 耳机关机或超出 2.4G 范围时组件**自动隐藏**（按协议链路标志判定，不会误显示 0%）；开机重连后 ≤ 30 秒自动恢复显示。接收器未插入或无响应时显示 `--`。
 - 每 30 秒自动轮询一次；左键点击组件立即刷新。
-- 右键展开详情页：大号电量、状态说明（已连接 / 耳机已关机或超出范围 / 未连接 / 设备无响应 / 正在读取）、电量进度条、上次更新时间，右上角「刷新」按钮。
+- 右键展开详情页：大号电量、状态说明（已连接 / 耳机已关机或超出范围 / 未连接 / 设备无响应 / 正在读取）、电量进度条、组件样式切换、上次更新时间，右上角「刷新」按钮。
 - 电量 ≤ 20% 时弹一条 5 秒低电量提醒；回到 25% 以上后重新武装，不会反复打扰。
 - 与官方 HECATE 客户端可同时运行（各自打开设备句柄，偶发被抢占靠重试兜底）。
-- 无任何用户配置；插件不落地任何文件。
+- 唯一的用户设置是组件样式，持久化到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`；读写失败安全，不影响电量显示。
 
 ## 电量获取原理
 
@@ -36,13 +37,14 @@ NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G �
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/HecateBatteryPlugin.cs` | 插件入口：组件注册、30 秒轮询调度、低电量提醒、生命周期 |
+| `src/HecateBatteryPlugin.cs` | 插件入口：组件注册、30 秒轮询调度、低电量提醒、样式切换、生命周期 |
 | `src/Core/BatterySnapshot.cs` | 链路状态与不可变电量快照（跨线程交接） |
+| `src/Core/PluginSettings.cs` | 组件样式枚举与 `%APPDATA%` 设置持久化（失败安全） |
 | `src/Hardware/NativeMethods.cs` | Win32 P/Invoke 声明（kernel32 / setupapi / hid） |
 | `src/Hardware/HecateHid.cs` | HID 设备枚举、查询报文、回包校验与解析 |
 | `src/Rendering/PluginFont.cs` | 从宿主取得当前字体（不缓存、不释放） |
-| `src/UI/HecateWidget.cs` | 灵动岛折叠态组件（电池图标 + 百分比 + 左键刷新） |
-| `src/UI/HecateDetailPage.cs` | 右键详情页（大号电量、进度条、状态与刷新按钮） |
+| `src/UI/HecateWidget.cs` | 灵动岛折叠态组件（耳机剪影 + 电池内嵌百分比，三种样式） |
+| `src/UI/HecateDetailPage.cs` | 右键详情页（大号电量、进度条、状态、样式切换与刷新按钮） |
 | `docs/G3MAX_BATTERY_PROTOCOL.md` | 通用 G3MAX 电量获取协议说明（面向所有开发者） |
 | `NPS.HecateBattery.csproj` | 目标框架、宿主项目引用和编译依赖 |
 | `releases/NPS.HecateBattery.dll` | 与当前版本对应的预编译产物 |
@@ -59,6 +61,7 @@ NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G �
 
 ## 版本记录
 
+- **1.2.0**：组件视觉重构并新增三种可选样式。岛上组件改为「左侧耳机剪影 + 右侧电池」，电量数字显示在电池内部，宽度恒定不随数字抖动；详情页新增「组件样式」区，可在**经典描边**（白描边电池）/ **彩色胶囊**（强调色描边 + 内衬染色）/ **极简细框**（常态半透明线框，低调不抢眼）之间切换，选择持久化到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`，重启保留。
 - **1.1.0**：修复耳机关机后组件显示 0% 的问题。现在按状态帧 `report[5]` 链路标志判定连接：收到离线帧立即把岛上组件自动隐藏（开机重连后 ≤ 30 秒恢复），离线帧的电量字节不再被误读；全程不会显示 0%。
 - **1.0.0**：首个版本。实现 G3 MAX 2.4G 接收器电量读取（HID 厂商集合 `col03`）、岛上电量组件、右键详情页、30 秒轮询 + 左键手动刷新、低电量提醒（≤20%，滞后 4% 防抖）、连续失败 2 次才切换离线显示；适配 NotchPeninsula 2.0.2（tag `NPS-v2.0.2`）。
 

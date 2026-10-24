@@ -13,6 +13,7 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 {
     internal const int PollSeconds = 30;
     internal static readonly SKColor WarningColor = new(0xF0, 0x5A, 0x5A);
+    internal static readonly SKColor AccentColor = new(0x56, 0xC8, 0xFF);
 
     private readonly HecateHid _hid = new();
     private IPluginHost? _host;
@@ -28,14 +29,19 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
     public string Id => "com.snow.hecatebattery";
     public string DisplayName => "HECATE 耳机电量";
-    public string Version => "1.1.0";
+    public string Version => "1.2.0";
     public string Author => "SnowDream";
 
     internal BatterySnapshot Snapshot => Volatile.Read(ref _snapshot);
 
+    /// <summary>折叠态组件样式（详情页可切换，持久化到 %APPDATA%）。</summary>
+    internal WidgetStyle Style { get; private set; } = WidgetStyle.Classic;
+
     public void Initialize(IPluginHost host)
     {
         _host = host;
+
+        Style = SettingsStore.Load();
 
         _widget = new HecateWidget(this);
         host.RegisterWidget(_widget);
@@ -156,6 +162,22 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
     {
         if (Volatile.Read(ref _disposed) != 0) return;
         ThreadPool.QueueUserWorkItem(_ => Refresh());
+    }
+
+    /// <summary>切换折叠态组件样式：持久化并触发宿主重测宽度。</summary>
+    internal void SetWidgetStyle(WidgetStyle style)
+    {
+        if (Style == style) return;
+
+        Style = style;
+        SettingsStore.Save(style);
+        TryInvalidateLayout();
+        LogState(5, "组件样式已切换为 " + (style switch
+        {
+            WidgetStyle.Capsule => "彩色胶囊",
+            WidgetStyle.Minimal => "极简细框",
+            _ => "经典描边",
+        }));
     }
 
     private void TryInvalidateLayout()

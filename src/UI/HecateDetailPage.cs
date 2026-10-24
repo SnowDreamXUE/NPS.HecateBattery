@@ -1,7 +1,7 @@
 // HecateDetailPage.cs
-// 右键展开的详情页（固定设计坐标 340×132，绘制时按 rect 等比缩放，
+// 右键展开的详情页（固定设计坐标 340×148，绘制时按 rect 等比缩放，
 // 宿主展开动画期间 rect 是插值尺寸，不能拿它当排版基准）。
-// 内容：标题/副标题、大号电量、状态文案、进度条、上次更新时间与刷新按钮。
+// 内容：标题/副标题、大号电量、状态文案、进度条、组件样式切换、上次更新时间与刷新按钮。
 using System;
 using NotchPeninsula.Plugins;
 using SkiaSharp;
@@ -11,8 +11,11 @@ namespace NPS.HecateBattery;
 internal sealed class HecateDetailPage : IDetailPage
 {
     private const float DesignW = 340f;
-    private const float DesignH = 132f;
+    private const float DesignH = 148f;
     private static readonly SKRect RefreshButton = new(258f, 16f, 326f, 42f);
+    private static readonly SKRect StyleClassicButton = new(86f, 104f, 160f, 122f);
+    private static readonly SKRect StyleCapsuleButton = new(168f, 104f, 242f, 122f);
+    private static readonly SKRect StyleMinimalButton = new(250f, 104f, 322f, 122f);
 
     private readonly HecateBatteryPlugin _plugin;
 
@@ -87,6 +90,15 @@ internal sealed class HecateDetailPage : IDetailPage
             }
         }
 
+        // 组件样式切换（A 经典描边 / B 彩色胶囊 / C 极简细框），点击即时生效并持久化。
+        DrawText(canvas, "组件样式", 18f, 117f, 10.5f, false, subColor);
+        DrawStyleButton(canvas, StyleClassicButton, "经典描边",
+            _plugin.Style == WidgetStyle.Classic, mainColor, subColor, alpha);
+        DrawStyleButton(canvas, StyleCapsuleButton, "彩色胶囊",
+            _plugin.Style == WidgetStyle.Capsule, mainColor, subColor, alpha);
+        DrawStyleButton(canvas, StyleMinimalButton, "极简细框",
+            _plugin.Style == WidgetStyle.Minimal, mainColor, subColor, alpha);
+
         string when = "—";
         if (s.UpdatedUtcTicks > 0)
         {
@@ -96,7 +108,7 @@ internal sealed class HecateDetailPage : IDetailPage
         }
         DrawText(canvas,
             "上次更新 " + when + " · 左键点击岛上的组件可立即刷新",
-            18f, 122f, 10.5f, false, subColor);
+            18f, 140f, 10.5f, false, subColor);
 
         using (var border = new SKPaint
         {
@@ -129,14 +141,74 @@ internal sealed class HecateDetailPage : IDetailPage
 
         float sx = x * (DesignW / rect.Width);
         float sy = y * (DesignH / rect.Height);
-        return RefreshButton.Contains(sx, sy)
-            ? new WidgetHit("refresh")
-            : WidgetHit.None;
+        if (RefreshButton.Contains(sx, sy)) return new WidgetHit("refresh");
+        if (StyleClassicButton.Contains(sx, sy)) return new WidgetHit("style.classic");
+        if (StyleCapsuleButton.Contains(sx, sy)) return new WidgetHit("style.capsule");
+        if (StyleMinimalButton.Contains(sx, sy)) return new WidgetHit("style.minimal");
+        return WidgetHit.None;
     }
 
     public void OnAction(string? action, float x, float y)
     {
-        if (action == "refresh") _plugin.RequestRefresh();
+        switch (action)
+        {
+            case "refresh":
+                _plugin.RequestRefresh();
+                break;
+            case "style.classic":
+                _plugin.SetWidgetStyle(WidgetStyle.Classic);
+                break;
+            case "style.capsule":
+                _plugin.SetWidgetStyle(WidgetStyle.Capsule);
+                break;
+            case "style.minimal":
+                _plugin.SetWidgetStyle(WidgetStyle.Minimal);
+                break;
+        }
+    }
+
+    private static void DrawStyleButton(
+        SKCanvas canvas,
+        SKRect r,
+        string label,
+        bool selected,
+        SKColor mainColor,
+        SKColor subColor,
+        byte alpha)
+    {
+        if (selected)
+        {
+            using (var fill = new SKPaint
+            {
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill,
+                Color = subColor.WithAlpha((byte)(alpha * 0.18f)),
+            })
+            {
+                canvas.DrawRoundRect(r, 9f, 9f, fill);
+            }
+        }
+
+        using (var border = new SKPaint
+        {
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = selected ? 1.2f : 1f,
+            Color = selected ? mainColor : subColor.WithAlpha((byte)(alpha * 0.55f)),
+        })
+        {
+            canvas.DrawRoundRect(r, 9f, 9f, border);
+        }
+
+        using (var measure = new SKPaint { IsAntialias = true, TextSize = 10.5f })
+        {
+            SKTypeface? face = PluginFont.SemiBold();
+            if (face != null) measure.Typeface = face;
+            float w = measure.MeasureText(label);
+            DrawText(canvas, label,
+                r.MidX - w / 2f, r.MidY + 3.8f, 10.5f, true,
+                selected ? mainColor : subColor);
+        }
     }
 
     private static void DrawText(
