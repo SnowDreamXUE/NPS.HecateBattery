@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <OutputType>Library</OutputType>
     <AssemblyName>NPS.HecateBattery</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>SnowDream</Authors>
     <RootNamespace>NPS.HecateBattery</RootNamespace>
     <!-- 宿主发布为 x64；插件必须同为 x64（P/Invoke 结构体布局按 64 位） -->

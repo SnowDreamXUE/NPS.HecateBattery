@@ -28,7 +28,7 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
     public string Id => "com.snow.hecatebattery";
     public string DisplayName => "HECATE 耳机电量";
-    public string Version => "1.0.0";
+    public string Version => "1.1.0";
     public string Author => "SnowDream";
 
     internal BatterySnapshot Snapshot => Volatile.Read(ref _snapshot);
@@ -84,6 +84,17 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
             LogState(0, "已连接，电量 " + level + "%");
             MaybeNotifyLow(level);
+        }
+        else if (level == -3)
+        {
+            // 接收器明确报告耳机离线（合法状态帧 byte[5]==0x00，不是 0% 电量）：
+            // 立即切换到 Offline（组件自动隐藏），不走「连续 2 次失败」防抖。
+            _failures = 0;
+            bool changed = Snapshot.State != LinkState.Offline;
+            Volatile.Write(ref _snapshot, new BatterySnapshot(-1, LinkState.Offline, DateTime.UtcNow.Ticks));
+            if (changed) TryInvalidateLayout();
+
+            LogState(4, "耳机已关机或超出 2.4G 范围，岛上组件已自动隐藏");
         }
         else
         {

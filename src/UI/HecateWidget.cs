@@ -36,6 +36,10 @@ internal sealed class HecateWidget : IWidget
 
     public float MeasureWidth(float availableHeight)
     {
+        // 耳机已关机/超出范围：宽度返回 0，宿主不分配空间、不绘制、不注册命中区（自动隐藏）。
+        // 开机重连后轮询刷新快照并触发 InvalidateWidgetLayout，组件自动恢复显示。
+        if (_plugin.Snapshot.State == LinkState.Offline) return 0f;
+
         using var paint = new SKPaint { IsAntialias = true, TextSize = TextSize };
         SKTypeface? face = PluginFont.SemiBold();
         if (face != null) paint.Typeface = face;
@@ -48,6 +52,8 @@ internal sealed class HecateWidget : IWidget
         if (frame.Alpha == 0) return;
 
         BatterySnapshot s = _plugin.Snapshot;
+        if (s.State == LinkState.Offline) return; // 宿主宽度缓存刷新前的过渡帧，不画
+
         string text = s.State == LinkState.Ok ? s.Level + "%" : "--";
 
         SKColor color = s.State == LinkState.Ok

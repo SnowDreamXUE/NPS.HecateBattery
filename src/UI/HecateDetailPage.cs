@@ -56,6 +56,7 @@ internal sealed class HecateDetailPage : IDetailPage
         {
             LinkState.Reading => "正在读取…",
             LinkState.Ok => "已连接 · 刷新周期 " + HecateBatteryPlugin.PollSeconds + " 秒",
+            LinkState.Offline => "耳机已关机或超出范围 · 开机重连后岛上组件自动恢复显示",
             LinkState.Disconnected => "未连接：请确认接收器已插入、耳机已开机",
             _ => "设备无响应：可能被其他程序短暂占用",
         };
