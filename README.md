@@ -1,6 +1,6 @@
 # NPS.HecateBattery
 
-NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.2.0**，插件 ID 为 `com.snow.hecatebattery`。
+NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.3.0**，插件 ID 为 `com.snow.hecatebattery`。
 
 ## 功能
 
@@ -54,13 +54,14 @@ NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G �
 
 项目当前面向 `net10.0-windows10.0.19041.0`。项目文件位于仓库根目录，通过相对路径引用同级的 `NotchPeninsula` 宿主源码工程，因此单独检出本仓库并不能解析完整的编译引用。当前仓库没有包含 CI 构建工作流，预编译产物位于 `releases/` 目录；远程构建所需的目录布局、依赖和注意事项见 [AI_DEVELOPMENT.md](AI_DEVELOPMENT.md)。
 
-本插件当前适配的宿主为 **NotchPeninsula 正式版 2.0.2**（GitHub release [NPS-v2.0.2](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.0.2)，对应 tag `NPS-v2.0.2`）。更新宿主兼容性前，请以该 tag 的宿主源码和插件 API 文档为准，不要默认 `main` 分支与已发布版本一致：
+本插件当前适配的宿主为 **NotchPeninsula 正式版 2.1.0**（GitHub release [NPS-v2.1.0](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.1.0)，对应 tag `NPS-v2.1.0`）。更新宿主兼容性前，请以该 tag 的宿主源码和插件 API 文档为准，不要默认 `main` 分支与已发布版本一致：
 
 - [NotchPeninsula 宿主仓库](https://github.com/GEORGEWWWU/NotchPeninsula)
-- [NPS-v2.0.2 的插件开发 API 文档](https://github.com/GEORGEWWWU/NotchPeninsula/blob/NPS-v2.0.2/NPS_PluginsAPI.md)
+- [NPS-v2.1.0 的插件开发 API 文档](https://github.com/GEORGEWWWU/NotchPeninsula/blob/NPS-v2.1.0/NPS_PluginsAPI.md)
 
 ## 版本记录
 
+- **1.3.0**：适配宿主 2.1.0 框架更新，折叠态组件从老协议 `MeasureWidth` 迁移到 **AutoWidth 协议**（`IAutoWidthWidget`）：`Layout` 用 `WidgetKit` 定宽盒子描述「耳机剪影 + 间距 + 电池」，宽度改由宿主按统一口径测量（内容向上取整 + 两侧 1px 留白），`Draw` 改用 `WidgetKit.ContentRect` 取内容区；耳机关机/超出范围时 `Layout` 返回 `null`（0 宽）自动隐藏，语义与原 `MeasureWidth` 返回 0 一致。组件宽度本就恒定，`WidthVaries` 保持默认 `false`。同时移除 `FontConfig.Changed` 订阅（2.1.0 起宿主在换字体时自行重测插件宽度，插件无需代劳）。
 - **1.2.0**：组件视觉重构并新增三种可选样式。岛上组件改为「左侧耳机剪影 + 右侧电池」，电量数字显示在电池内部，宽度恒定不随数字抖动；详情页新增「组件样式」区，可在**经典描边**（白描边电池）/ **彩色胶囊**（强调色描边 + 内衬染色）/ **极简细框**（常态半透明线框，低调不抢眼）之间切换，选择持久化到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`，重启保留。
 - **1.1.0**：修复耳机关机后组件显示 0% 的问题。现在按状态帧 `report[5]` 链路标志判定连接：收到离线帧立即把岛上组件自动隐藏（开机重连后 ≤ 30 秒恢复），离线帧的电量字节不再被误读；全程不会显示 0%。
 - **1.0.0**：首个版本。实现 G3 MAX 2.4G 接收器电量读取（HID 厂商集合 `col03`）、岛上电量组件、右键详情页、30 秒轮询 + 左键手动刷新、低电量提醒（≤20%，滞后 4% 防抖）、连续失败 2 次才切换离线显示；适配 NotchPeninsula 2.0.2（tag `NPS-v2.0.2`）。

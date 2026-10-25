@@ -1,7 +1,8 @@
 // PluginFont.cs
 // 从宿主 FontConfig 取得字体。宿主字体属于共享资源：
 // 每次绘制按需现取、不缓存、绝不 Dispose；用 try/catch 包住允许永久降级为 Skia 默认字体。
-// MeasureWidth 与 Draw 必须用同一档字体面，否则量出的宽度和画出的不一致。
+// 2.1.0 起 AutoWidth 协议的测量字体由宿主 WidgetKit 统一（本组件布局为定宽盒子、不依赖字体），
+// 这里只服务 Draw 绘制，取的档位与 WidgetKit.Typeface 一致（SemiBold ↔ FontConfig.SemiBold）。
 using SkiaSharp;
 
 namespace NPS.HecateBattery;
