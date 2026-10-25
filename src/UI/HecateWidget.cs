@@ -6,20 +6,20 @@
 //   Minimal 方案 C · 极简细框 —— 线条耳机 + 细边框电池，无填充，最轻量。
 // 电量 ≤ 20% 或未连接时按既有规则变色/置灰；关机(Offline)整组件隐藏。
 // 只读不可变快照并绘制；宽度变化后由插件调用 InvalidateWidgetLayout 触发宿主重测。
+// 适配宿主 2.1.0 AutoWidth 协议：实现 IAutoWidthWidget，宽度由宿主按 Layout 盒子测量
+//（不再实现老协议 MeasureWidth），槽位两侧 1px 留白由宿主统一加，绘制用 ContentRect 取内容区。
 using System;
 using NotchPeninsula.Plugins;
 using SkiaSharp;
 
 namespace NPS.HecateBattery;
 
-internal sealed class HecateWidget : IWidget
+internal sealed class HecateWidget : IAutoWidthWidget
 {
-    private const float LeftPad = 1f;
     private const float HeadsetW = 15f;   // 耳机剪影宽
     private const float Gap = 5f;         // 耳机与电池间距
     private const float BodyH = 12.5f;    // 电池主体高（方案 A/B；C 为 11.5）
     private const float CapBlock = 2.8f;  // 电池小帽区（三种样式统一：帽宽 + 间隙）
-    private const float RightPad = 1f;
     private const float Inset = 1.9f;     // 电池内部留白（数字与填充的内边界）
 
     private readonly HecateBatteryPlugin _plugin;
@@ -35,15 +35,21 @@ internal sealed class HecateWidget : IWidget
     public string DisplayName => "HECATE 电量";
     public IDetailPage? DetailPage => _detail;
 
-    public float MeasureWidth(float availableHeight)
+    // 宽度只有「恒定 / 0（隐藏）」两态，不随内容抖动：保持默认 false，
+    // 宿主对固定宽组件零额外开销，显示/隐藏切换即时生效（没有 600ms 收窄迟滞）。
+    public Box? Layout(float availableHeight)
     {
-        // 耳机已关机/超出范围：宽度返回 0，宿主不分配空间、不绘制、不注册命中区（自动隐藏）。
+        // 耳机已关机/超出范围：返回 null（0 宽），宿主本帧不分配空间、不绘制、不注册命中区（自动隐藏）。
         // 开机重连后轮询刷新快照并触发 InvalidateWidgetLayout，组件自动恢复显示。
-        if (_plugin.Snapshot.State == LinkState.Offline) return 0f;
+        if (_plugin.Snapshot.State == LinkState.Offline) return null;
 
         // "100%" 靠数字自适应缩放放进电池，因此各样式宽度恒定，不随电量抖动。
+        // 电池块 = 主体宽 + 右侧电极帽；两侧 1px 留白由宿主统一加（见 WidgetKit.AutoPadX）。
         float bodyW = _plugin.Style == WidgetStyle.Minimal ? 22.5f : 24f;
-        return LeftPad + HeadsetW + Gap + bodyW + CapBlock + RightPad;
+        return WidgetKit.Row(
+            WidgetKit.Icon(HeadsetW),
+            WidgetKit.Gap(Gap),
+            WidgetKit.Icon(bodyW + CapBlock));
     }
 
     public void Draw(SKCanvas canvas, SKRect rect, WidgetFrame frame)
@@ -59,7 +65,7 @@ internal sealed class HecateWidget : IWidget
 
         SKColor glyphColor = ColorFor(ok, low, frame).WithAlpha(frame.Alpha);
         float cy = rect.MidY + frame.TextOffsetY;
-        float left = rect.Left + LeftPad;
+        float left = WidgetKit.ContentRect(rect).Left;
 
         DrawHeadset(canvas, left, cy, glyphColor, outline: _plugin.Style == WidgetStyle.Minimal);
 

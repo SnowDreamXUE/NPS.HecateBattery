@@ -53,20 +53,20 @@
 ## 项目与宿主
 
 - 插件 ID：`com.snow.hecatebattery`
-- 当前插件版本：`1.2.0`
+- 当前插件版本：`1.3.0`
 - 目标框架：`net10.0-windows10.0.19041.0`（必须与宿主一致）
 - 插件入口：`NPS.HecateBattery.HecateBatteryPlugin`（public，实现 `INotchPlugin`）
 - 宿主 API 命名空间：`NotchPeninsula.Plugins`；字体与日志在 `NotchPeninsula`（`FontConfig` / `Logger`，非冻结契约，全部 try/catch 包裹）
-- 目标宿主版本：**NotchPeninsula 正式版 2.0.2**（GitHub tag `NPS-v2.0.2`，release 发布于 2026-10-17）。
+- 目标宿主版本：**NotchPeninsula 正式版 2.1.0**（GitHub tag `NPS-v2.1.0`，tag 发布于 2026-10-24）。
 
-⚠️ **必须按 tag 拉取宿主源码，不要用 `main`**：`main` 是未发布的 2.0.3 开发版，插件 API 已多出 `IAutoWidthWidget`、`WidgetKit`、`GetSlotBudget` 等成员；用 `main` 编出的 DLL 放进 2.0.2 会加载失败。同理，本仓库源码**禁止使用**上述 2.0.3 专属 API。
+⚠️ **必须按 tag 拉取宿主源码，不要用 `main`**：`main` 是未发布的开发版，API 可能继续演进；用非目标 tag 的源码编出的 DLL 放进正式版可能加载失败。2.1.0 的框架更新是把 AutoWidth 协议转正：`IAutoWidthWidget`、`WidgetKit`（`Text`/`Icon`/`Gap`/`Row`/`Stack`/`Min`、`Typeface`、`ContentRect`）与 `IPluginHost.GetSlotBudget` 已是正式 API；老协议 `MeasureWidth` 仍被兼容，但新代码应走 AutoWidth。本插件 1.3.0 起已迁移到 `IAutoWidthWidget`。
 
 官方参考：
 
 - [NotchPeninsula 仓库](https://github.com/GEORGEWWWU/NotchPeninsula)
-- [NPS-v2.0.2 tag](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.0.2)
-- 该 tag 内的 `Plugin/PluginApi.cs` 与根目录 `NPS_PluginsAPI.md` 是插件 API 的唯一权威来源。
-- 若目标版本有对应 tag，应优先使用该 tag 的 API 文档和宿主源码，不要默认 `main` 与已发布版本完全一致。宿主发布新版本后，先 diff 新 tag 的 `PluginApi.cs`，确认本仓库用到的成员没有改名/删除，再决定是否重编。
+- [NPS-v2.1.0 tag](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.1.0)
+- 该 tag 内的 `Plugin/PluginApi.cs`、`Plugin/WidgetKit.cs` 与根目录 `NPS_PluginsAPI.md` 是插件 API 的唯一权威来源。
+- 若目标版本有对应 tag，应优先使用该 tag 的 API 文档和宿主源码，不要默认 `main` 与已发布版本完全一致。宿主发布新版本后，先 diff 新 tag 的 `PluginApi.cs` 与 `WidgetKit.cs`，确认本仓库用到的成员没有改名/删除，再决定是否重编。
 
 ## 当前实现结构
 
@@ -99,7 +99,7 @@ NPS.HecateBattery/
 
 实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 只做四件事：读回持久化样式、注册组件、挂 `ScheduleRefresh(30s)` 定时器、投递一次初始轮询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。轮询用 `Interlocked` 门闩防重入；轮询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。`SetWidgetStyle` 处理详情页的样式切换：写持久化 + `InvalidateWidgetLayout`，样式不变时直接返回。
 
-失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`MeasureWidth` 返回 0，宿主不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一轮轮询（≤ 30 s）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 30 秒刷屏。
+失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`Layout` 返回 `null`，宿主按 0 宽处理：不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一轮轮询（≤ 30 s）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 30 秒刷屏。
 
 低电量提醒：`level <= 20` 且比上次提醒值低 4 以上时 `PostReminder` 一条 5 秒提醒；回到 `> 25` 后重置。
 
@@ -109,7 +109,7 @@ NPS.HecateBattery/
 
 ### `src/Core/PluginSettings.cs`
 
-`WidgetStyle` 枚举（Classic / Capsule / Minimal）与 `SettingsStore`。宿主 v2.0.2 没有插件存储 API，样式持久化落到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`（System.Text.Json 单字段，读写全部 try/catch，任何异常回落默认 Classic，绝不影响电量显示）。`Load` 只在 `Initialize` 调一次，`Save` 只在样式实际变化时调。
+`WidgetStyle` 枚举（Classic / Capsule / Minimal）与 `SettingsStore`。样式持久化落到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`（System.Text.Json 单字段，读写全部 try/catch，任何异常回落默认 Classic，绝不影响电量显示），不依赖宿主的 `GetSetting`/`SetSetting`，读写失败也不影响电量显示。`Load` 只在 `Initialize` 调一次，`Save` 只在样式实际变化时调。
 
 ### `src/Hardware/NativeMethods.cs` 与 `src/Hardware/HecateHid.cs`
 
@@ -123,15 +123,15 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 
 ### `src/Rendering/PluginFont.cs`
 
-宿主字体是共享资源：每次绘制按需现取、不缓存、绝不 `Dispose`；`MeasureWidth` 与 `Draw` 必须用同一档字体面，否则量宽和画宽不一致。`FontConfig`/`Logger` 是非冻结契约，全部 try/catch，允许永久降级为 Skia 默认字体/无日志。
+宿主字体是共享资源：每次绘制按需现取、不缓存、绝不 `Dispose`；`FontConfig`/`Logger` 是非冻结契约，全部 try/catch，允许永久降级为 Skia 默认字体/无日志。2.1.0 起 AutoWidth 的测量字体由宿主 `WidgetKit.Typeface` 统一；本组件布局全是定宽盒子、不依赖字体，`PluginFont` 只服务 `Draw`，取的档位与 `WidgetKit.Typeface` 一致（SemiBold ↔ `FontConfig.SemiBold`）。
 
 ### `src/UI/HecateWidget.cs` 与 `src/UI/HecateDetailPage.cs`
 
-折叠态组件约 50–60 px 宽，造型为「左侧耳机剪影 + 右侧电池、数字内嵌电池内部」（宿主无 emoji 字体，耳机用 SkiaSharp 路径绘制剪影），组件宽度恒定、数字超宽（如 `100%`）时等比缩小，不随数字抖动。组件有三种样式（`WidgetStyle`）：**Classic**（白描边电池 + 进度填充）、**Capsule**（强调色 `#56C8FF` 胶囊描边 + 内衬染色）、**Minimal**（常态 55% 线框 + 92% 数字的低调细框，低电量恢复全亮度；耳机剪影同步改为线条描边）。切换链路：详情页 `OnAction("style.*")` → `SetWidgetStyle`（持久化 + `InvalidateWidgetLayout`）。
+折叠态组件（含宿主 1px 两侧留白后槽位约 47–49 px 宽）造型为「左侧耳机剪影 + 右侧电池、数字内嵌电池内部」（宿主无 emoji 字体，耳机用 SkiaSharp 路径绘制剪影），组件宽度恒定、数字超宽（如 `100%`）时等比缩小，不随数字抖动。**宿主 2.1.0 AutoWidth 协议**：组件实现 `IAutoWidthWidget`，不再写 `MeasureWidth`——`Layout` 返回 `WidgetKit.Row(Icon(HeadsetW), Gap(Gap), Icon(bodyW + CapBlock))` 定宽盒子，宽度由宿主统一测量（内容向上取整 + 两侧 `AutoPadX` 留白）；`Draw` 用 `WidgetKit.ContentRect(rect)` 取内容区定位。宽度只有「恒定 / 0（隐藏）」两态，`WidthVaries` 保持默认 `false`（显示/隐藏即时切换，无收窄迟滞）。组件有三种样式（`WidgetStyle`）：**Classic**（白描边电池 + 进度填充）、**Capsule**（强调色 `#56C8FF` 胶囊描边 + 内衬染色）、**Minimal**（常态 55% 线框 + 92% 数字的低调细框，低电量恢复全亮度；耳机剪影同步改为线条描边）。切换链路：详情页 `OnAction("style.*")` → `SetWidgetStyle`（持久化 + `InvalidateWidgetLayout`）。
 
-电量 ≤ 20% 用警示红 `#F05A5A`；耳机关机/超出范围（`Offline`）时 `MeasureWidth` 返回 0、`Draw` 直接返回，宿主据此自动隐藏组件（不占宽、不绘制、不可命中），开机重连后自动恢复；接收器异常显示灰色 `--`；左键触发一次手动刷新（线程池，不阻塞渲染），右键由宿主展开详情页。
+电量 ≤ 20% 用警示红 `#F05A5A`；耳机关机/超出范围（`Offline`）时 `Layout` 返回 `null`（0 宽）、`Draw` 直接返回，宿主据此自动隐藏组件（不占宽、不绘制、不可命中），开机重连后自动恢复；接收器异常显示灰色 `--`；左键触发一次手动刷新（线程池，不阻塞渲染），右键由宿主展开详情页。
 
-详情页按固定设计坐标 340×148 排版，绘制时按 `rect` 等比缩放——宿主展开动画期间 `rect` 是插值尺寸，不能拿它当排版基准。详情页右上角「刷新」按钮、底部「组件样式」三按钮（命中值 `style.classic` / `style.capsule` / `style.minimal`，选中态高亮描边）。`MeasureWidth` 返回值被宿主缓存，任何影响文字宽度的状态变化（`96%` → `100%`、Ok → `--`、样式切换）都必须触发 `InvalidateWidgetLayout`。
+详情页按固定设计坐标 340×148 排版，绘制时按 `rect` 等比缩放——宿主展开动画期间 `rect` 是插值尺寸，不能拿它当排版基准。详情页右上角「刷新」按钮、底部「组件样式」三按钮（命中值 `style.classic` / `style.capsule` / `style.minimal`，选中态高亮描边）。组件槽位宽度被宿主缓存，任何影响宽度的状态变化（`Offline` ↔ 在线、样式切换改变电池主体宽）都必须触发 `InvalidateWidgetLayout`；数字内容（`96%` → `100%`、Ok → `--`）不影响宽度，无需通知。
 
 ## 线程与生命周期约定
 
@@ -140,8 +140,8 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 | `Initialize` | 宿主加载线程 | 不做 HID I/O、不阻塞 |
 | `ScheduleRefresh` 回调 | 宿主 Timer 线程 | 同步 HID 轮询（最坏 1.5 s）后写快照 |
 | 手动刷新 | 线程池 | 门闩防重入，进行中直接丢弃 |
-| `MeasureWidth` / `Draw` | 渲染线程 | 只读快照 + 绘制；无 I/O、无锁、不阻塞 |
-| `Dispose` | 卸载线程 | 置 `_disposed`、停定时器、退订字体事件；在途轮询自行结束并关句柄 |
+| `Layout` / `Draw` | 渲染线程 | `Layout` 只读快照、返回纯盒子（无 I/O、无锁、不耗时）；`Draw` 只读快照 + 绘制 |
+| `Dispose` | 卸载线程 | 置 `_disposed`、停定时器；在途轮询自行结束并关句柄 |
 
 - `SKPaint` 等绘制资源**每帧临时创建、用完即释放**，绝不缓存成字段跨线程复用（否则卸载/热重载时会 `0xC0000005`）。
 - 组件被隐藏时插件仍在运行；不能把「岛上看不到」当成卸载。
@@ -152,18 +152,18 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 
 ## 项目引用与依赖
 
-`NPS.HecateBattery.csproj` 通过相对路径引用 `..\NotchPeninsula\NotchPeninsula.csproj`，并设置 `Private="false"`。SkiaSharp 固定 2.88.8（与宿主 v2.0.2 一致）且 `ExcludeAssets="runtime"`，仅作编译引用，运行时由宿主提供；插件不随带任何宿主已有程序集。
+`NPS.HecateBattery.csproj` 通过相对路径引用 `..\NotchPeninsula\NotchPeninsula.csproj`，并设置 `Private="false"`。SkiaSharp 固定 2.88.8（与宿主 v2.1.0 一致）且 `ExcludeAssets="runtime"`，仅作编译引用，运行时由宿主提供；插件不随带任何宿主已有程序集。
 
 如果远程环境需要构建，两个仓库必须按相对路径并列放置，不能把插件源码放进宿主仓库目录（宿主项目的默认源文件通配可能把插件代码一并编译进宿主）：
 
 ```text
 工作目录/
-├── NotchPeninsula/        # 按 tag NPS-v2.0.2 克隆的宿主源码
+├── NotchPeninsula/        # 按 tag NPS-v2.1.0 克隆的宿主源码
 └── NPS.HecateBattery/      # 本插件仓库
 ```
 
 ```bash
-git clone --branch NPS-v2.0.2 --depth 1 https://github.com/GEORGEWWWU/NotchPeninsula.git
+git clone --branch NPS-v2.1.0 --depth 1 https://github.com/GEORGEWWWU/NotchPeninsula.git
 ```
 
 在云电脑、托管 Windows runner 或其他所选远程开发平台中，先确认或安装 .NET 10 SDK，再进入插件目录构建。`InstallToHostPlugins` 目标会把 DLL 复制到宿主输出目录的 `plugins` 文件夹。若当前环境是用户本机，不要运行下面的构建命令；若当前环境是云电脑或其他授权的远程环境，则应运行并验证构建结果：
@@ -187,6 +187,6 @@ dotnet build NPS.HecateBattery.csproj -c Release -p:EnableWindowsTargeting=true 
 - `dotnet build -c Release` 0 error；
 - DLL 的 `AssemblyName` 与文件名一致（`NPS.HecateBattery`）；
 - 源码不含硬编码电量值（如 `96`）、MAC 地址、机器专属路径；
-- 全文搜索确认没有使用 `WidgetKit` / `IAutoWidthWidget` / `GetSlotBudget` / `TextWeight`（2.0.3 专属 API）；
+- `HecateWidget` 实现 `IAutoWidthWidget`：`Layout` 只返回 `WidgetKit` 工厂构造的盒子（不自己派生 `Box`），不做 I/O、加锁或耗时计算；隐藏语义用返回 `null` 表达，不用 0 宽盒子；
 - `Id` 仍为 `com.snow.hecatebattery`；
 - `releases/` 中的 DLL 与当前源码构建产物一致。

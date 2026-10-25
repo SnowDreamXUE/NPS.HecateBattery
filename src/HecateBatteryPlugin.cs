@@ -25,11 +25,10 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
     private int _failures;
     private int _lastNotified = 101;
     private int _lastLoggedState = -1;
-    private bool _fontHooked;
 
     public string Id => "com.snow.hecatebattery";
     public string DisplayName => "HECATE 耳机电量";
-    public string Version => "1.2.0";
+    public string Version => "1.3.0";
     public string Author => "SnowDream";
 
     internal BatterySnapshot Snapshot => Volatile.Read(ref _snapshot);
@@ -48,21 +47,11 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
         _refresh = host.ScheduleRefresh(TimeSpan.FromSeconds(PollSeconds), Refresh);
 
-        try { TryHookFontChanged(); } catch { }
+        // 不订阅 FontConfig.Changed：宿主 2.1.0 起换字体会自行重测插件宽度，
+        // 且本组件 Layout 全部是定宽盒子，与字体无关（绘制字体每帧现取）。
 
         // 不要在 Initialize 里做 HID I/O（最坏 1.5 s）；投递到线程池。
         ThreadPool.QueueUserWorkItem(_ => Refresh());
-    }
-
-    private void TryHookFontChanged()
-    {
-        FontConfig.Changed += OnFontChanged;
-        _fontHooked = true;
-    }
-
-    private void OnFontChanged()
-    {
-        TryInvalidateLayout();
     }
 
     private void Refresh()
@@ -195,12 +184,6 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-
-        if (_fontHooked)
-        {
-            try { FontConfig.Changed -= OnFontChanged; } catch { }
-            _fontHooked = false;
-        }
 
         _refresh?.Dispose();
         _refresh = null;
