@@ -19,7 +19,7 @@ internal sealed class HecateHid
     private const int ReadSliceMs = 250;
     private const int Attempts = 4;
 
-    private static readonly Guid HidInterfaceGuid =
+    internal static readonly Guid HidInterfaceGuid =
         new Guid("4d1e55b2-f16f-11cf-88cb-001111000030");
 
     private static readonly string[] Collections = { "col03", "col02", "col04" };
