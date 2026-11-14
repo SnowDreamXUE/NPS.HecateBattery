@@ -1,5 +1,5 @@
 // HecateBatteryPlugin.cs
-// NotchPeninsula 插件入口：注册组件、挂 30 秒轮询定时器、低电量提醒与生命周期管理。
+// NotchPeninsula 插件入口：注册组件、设备通知、定时查询、低电量提醒与生命周期管理。
 // HID 协议细节见 Hardware/HecateHid.cs 与 docs/G3MAX_BATTERY_PROTOCOL.md。
 using System;
 using System.Threading;
@@ -11,16 +11,23 @@ namespace NPS.HecateBattery;
 
 public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 {
-    internal const int PollSeconds = 30;
+    internal const int PollSeconds = 5;
     internal static readonly SKColor WarningColor = new(0xF0, 0x5A, 0x5A);
     internal static readonly SKColor AccentColor = new(0x56, 0xC8, 0xFF);
 
     private readonly HecateHid _hid = new();
+    private readonly object _refreshLock = new();
     private IPluginHost? _host;
     private IDisposable? _refresh;
+    private Timer? _delayedRefresh;
+    private HecateDeviceNotifications? _deviceNotifications;
     private HecateWidget? _widget;
     private BatterySnapshot _snapshot = new(-1, LinkState.Reading, 0);
-    private int _polling;
+    private bool _polling;
+    private bool _refreshPending;
+    private bool _manualRefreshPending;
+    private bool _hasPolled;
+    private long _lastPollStarted;
     private int _disposed;
     private int _failures;
     private int _lastNotified = 101;
@@ -28,7 +35,7 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
     public string Id => "com.snow.hecatebattery";
     public string DisplayName => "HECATE 耳机电量";
-    public string Version => "1.3.0";
+    public string Version => "1.4.0";
     public string Author => "SnowDream";
 
     internal BatterySnapshot Snapshot => Volatile.Read(ref _snapshot);
@@ -45,23 +52,68 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
         _widget = new HecateWidget(this);
         host.RegisterWidget(_widget);
 
-        _refresh = host.ScheduleRefresh(TimeSpan.FromSeconds(PollSeconds), Refresh);
+        _delayedRefresh = new Timer(_ => SchedulePoll(), null, Timeout.Infinite, Timeout.Infinite);
+        _refresh = host.ScheduleRefresh(TimeSpan.FromSeconds(PollSeconds), SchedulePoll);
+        try { _deviceNotifications = new HecateDeviceNotifications(SchedulePoll); }
+        catch (Exception ex)
+        {
+            try { Logger.Error("[HecateBattery] 设备通知不可用，继续定时查询", ex); } catch { }
+        }
 
         // 不订阅 FontConfig.Changed：宿主 2.1.0 起换字体会自行重测插件宽度，
         // 且本组件 Layout 全部是定宽盒子，与字体无关（绘制字体每帧现取）。
 
         // 不要在 Initialize 里做 HID I/O（最坏 1.5 s）；投递到线程池。
-        ThreadPool.QueueUserWorkItem(_ => Refresh());
+        SchedulePoll();
     }
 
-    private void Refresh()
-    {
-        if (Volatile.Read(ref _disposed) != 0) return;
-        if (Interlocked.CompareExchange(ref _polling, 1, 0) != 0) return;
+    private void SchedulePoll() => SchedulePoll(false);
 
+    private void SchedulePoll(bool manual)
+    {
+        lock (_refreshLock)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || (manual && _polling)) return;
+            _refreshPending = true;
+            _manualRefreshPending |= manual;
+            StartPendingPoll();
+        }
+    }
+
+    private void StartPendingPoll()
+    {
+        if (!_refreshPending || _polling || Volatile.Read(ref _disposed) != 0) return;
+
+        long elapsed = Environment.TickCount64 - _lastPollStarted;
+        long delay = _hasPolled && !_manualRefreshPending
+            ? Math.Max(0, PollSeconds * 1000L - elapsed)
+            : 0;
+        if (delay > 0)
+        {
+            _delayedRefresh?.Change((int)delay, Timeout.Infinite);
+            return;
+        }
+
+        _refreshPending = false;
+        _manualRefreshPending = false;
+        _polling = true;
+        _hasPolled = true;
+        _lastPollStarted = Environment.TickCount64;
+        ThreadPool.QueueUserWorkItem(_ => PollWorker());
+    }
+
+    private void PollWorker()
+    {
         try { DoPoll(); }
         catch (Exception ex) { HandleFailure(ex); }
-        finally { Volatile.Write(ref _polling, 0); }
+        finally
+        {
+            lock (_refreshLock)
+            {
+                _polling = false;
+                StartPendingPoll();
+            }
+        }
     }
 
     private void DoPoll()
@@ -149,8 +201,7 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
 
     internal void RequestRefresh()
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
-        ThreadPool.QueueUserWorkItem(_ => Refresh());
+        SchedulePoll(true);
     }
 
     /// <summary>切换折叠态组件样式：持久化并触发宿主重测宽度。</summary>
@@ -185,7 +236,15 @@ public sealed class HecateBatteryPlugin : INotchPlugin, IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
+        _deviceNotifications?.Dispose();
+        _deviceNotifications = null;
         _refresh?.Dispose();
         _refresh = null;
+        lock (_refreshLock)
+        {
+            _delayedRefresh?.Dispose();
+            _delayedRefresh = null;
+            _refreshPending = false;
+        }
     }
 }

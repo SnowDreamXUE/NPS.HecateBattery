@@ -53,7 +53,7 @@
 ## 项目与宿主
 
 - 插件 ID：`com.snow.hecatebattery`
-- 当前插件版本：`1.3.0`
+- 当前插件版本：`1.4.0`
 - 目标框架：`net10.0-windows10.0.19041.0`（必须与宿主一致）
 - 插件入口：`NPS.HecateBattery.HecateBatteryPlugin`（public，实现 `INotchPlugin`）
 - 宿主 API 命名空间：`NotchPeninsula.Plugins`；字体与日志在 `NotchPeninsula`（`FontConfig` / `Logger`，非冻结契约，全部 try/catch 包裹）
@@ -79,8 +79,9 @@ NPS.HecateBattery/
 │   ├── HecateBatteryPlugin.cs        # 插件入口：注册、轮询调度、提醒、样式切换、生命周期
 │   ├── Core/BatterySnapshot.cs       # LinkState + 不可变电量快照
 │   ├── Core/PluginSettings.cs        # WidgetStyle 枚举 + %APPDATA% 设置持久化
-│   ├── Hardware/NativeMethods.cs     # Win32 P/Invoke（kernel32/setupapi/hid）
+│   ├── Hardware/NativeMethods.cs     # Win32 P/Invoke（kernel32/setupapi/hid/cfgmgr32）
 │   ├── Hardware/HecateHid.cs         # HID 枚举、查询、回包解析（协议实现）
+│   ├── Hardware/HecateDeviceNotifications.cs # HID 接口到达/移除通知
 │   ├── Rendering/PluginFont.cs       # 从宿主 FontConfig 取字体（不缓存、不 Dispose）
 │   └── UI/
 │       ├── HecateWidget.cs           # 灵动岛折叠态组件（耳机剪影 + 电池，三种样式）
@@ -97,9 +98,9 @@ NPS.HecateBattery/
 
 ### `src/HecateBatteryPlugin.cs`
 
-实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 只做四件事：读回持久化样式、注册组件、挂 `ScheduleRefresh(30s)` 定时器、投递一次初始轮询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。轮询用 `Interlocked` 门闩防重入；轮询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。`SetWidgetStyle` 处理详情页的样式切换：写持久化 + `InvalidateWidgetLayout`，样式不变时直接返回。
+实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 读回样式、注册组件、挂 `ScheduleRefresh(5s)` 定时器、注册 HID 接口通知，并投递一次初始查询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。定时与设备事件请求在锁内合并，自动查询起点至少间隔 5 秒；手动刷新沿用原有即时请求语义，查询进行中可丢弃。查询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。`SetWidgetStyle` 处理详情页的样式切换：写持久化 + `InvalidateWidgetLayout`，样式不变时直接返回。
 
-失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`Layout` 返回 `null`，宿主按 0 宽处理：不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一轮轮询（≤ 30 s）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 30 秒刷屏。
+失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`Layout` 返回 `null`，宿主按 0 宽处理：不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一次查询（通常 ≤ 5 s 加查询耗时）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 5 秒刷屏。
 
 低电量提醒：`level <= 20` 且比上次提醒值低 4 以上时 `PostReminder` 一条 5 秒提醒；回到 `> 25` 后重置。
 
@@ -116,6 +117,8 @@ NPS.HecateBattery/
 Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必须声明为 `IntPtr`——写成 `uint` 会在 x64 下让 `hEvent` 偏移错位，所有 `ReadFile` 报 `ERROR_INVALID_HANDLE (6)`。
 
 `HecateHid.Poll` 返回值约定：`0..100` 成功（耳机在线）；`-1` 设备不存在；`-2` 设备在但无有效回包；`-3` 收到合法状态帧但 `byte[5]==0x00`（耳机已关机/超出 2.4G 范围，此时 `byte[6]` 不是电量）。查询/回包报文、校验规则（含 `report[5]` 链路标志）、时序参数（读窗 300 ms、重试 4×100 ms、轮询 ≥ 5 s）**一律以 `docs/G3MAX_BATTERY_PROTOCOL.md` 为准**，不要凭记忆改动协议常量。
+
+`HecateDeviceNotifications` 用 `CM_Register_Notification` 监听 HID 类设备接口，只处理目标 VID/PID 的 `col03` 到达/移除事件。回调只提交刷新请求，不做 HID I/O；接收器可能在耳机关机时短暂重枚举，而开机不产生设备事件，所以事件不能直接改变 `LinkState`。注册失败时继续使用 5 秒定时查询；`Dispose` 注销通知并停止延迟刷新定时器。
 
 状态帧解析统一走 `HecateHid.TryParseStatusReport`（纯函数，不碰 Win32），它对离线帧有回归测试覆盖（`.ai-work/parse-test/` 本地工程链接源码运行，不入库）：核心断言是「离线帧绝不能被解析成在线 + 0% 电量」，改动解析逻辑前先跑一遍。
 
@@ -138,10 +141,11 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 | 阶段 | 线程 | 约束 |
 |---|---|---|
 | `Initialize` | 宿主加载线程 | 不做 HID I/O、不阻塞 |
-| `ScheduleRefresh` 回调 | 宿主 Timer 线程 | 同步 HID 轮询（最坏 1.5 s）后写快照 |
-| 手动刷新 | 线程池 | 门闩防重入，进行中直接丢弃 |
+| `ScheduleRefresh` 回调 | 宿主 Timer 线程 | 合并请求并投递后台查询，不阻塞宿主 |
+| 设备通知回调 | Windows PnP 回调线程 | 过滤目标 HID 接口并提交请求，不做 HID I/O |
+| 手动刷新 | 调用线程 | 请求后台查询；查询进行中直接丢弃 |
 | `Layout` / `Draw` | 渲染线程 | `Layout` 只读快照、返回纯盒子（无 I/O、无锁、不耗时）；`Draw` 只读快照 + 绘制 |
-| `Dispose` | 卸载线程 | 置 `_disposed`、停定时器；在途轮询自行结束并关句柄 |
+| `Dispose` | 卸载线程 | 置 `_disposed`、注销通知、停定时器；在途查询自行结束并关句柄 |
 
 - `SKPaint` 等绘制资源**每帧临时创建、用完即释放**，绝不缓存成字段跨线程复用（否则卸载/热重载时会 `0xC0000005`）。
 - 组件被隐藏时插件仍在运行；不能把「岛上看不到」当成卸载。
