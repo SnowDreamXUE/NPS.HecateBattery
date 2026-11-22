@@ -1,13 +1,13 @@
 # NPS.HecateBattery
 
-NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.4.0**，插件 ID 为 `com.snow.hecatebattery`。
+NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G 接收器连接时的电量」显示在灵动岛上。项目以 C# 编写，当前版本为 **1.5.0**，插件 ID 为 `com.snow.hecatebattery`。
 
 ## 功能
 
 - 岛上组件为「左侧耳机剪影 + 右侧电池」造型，电量数字显示在电池内部；电量 ≤ 20% 变警示红。
 - 组件提供三种可选样式：**经典描边**、**彩色胶囊**、**极简细框**，在详情页「组件样式」区一键切换，选择持久化到 `%APPDATA%`，重启后保留。
-- 耳机关机或超出 2.4G 范围时组件**自动隐藏**（按协议链路标志判定，不会误显示 0%）；开机重连后通常在 5 秒内加一次查询耗时恢复显示。接收器未插入或无响应时显示 `--`。
-- 每 5 秒查询一次；接收器的 HID 接口到达或移除时提前安排查询；左键点击组件可手动刷新。
+- 耳机关机或超出 2.4G 范围时组件**自动隐藏**（按协议链路标志判定，不会误显示 0%）；开机重连后按当前查询模式自动恢复。接收器未插入或无响应时显示 `--`。
+- 提供普通模式（每 30 秒查询）与增强模式（每 5 秒查询并监听接收器 HID 接口到达/移除）；左键点击组件可手动刷新。增强模式查询更频繁，可能触发异常连接播报，但原因尚未证实。
 - 右键展开详情页：大号电量、状态说明（已连接 / 耳机已关机或超出范围 / 未连接 / 设备无响应 / 正在读取）、电量进度条、组件样式切换、上次更新时间，右上角「刷新」按钮。
 - 电量 ≤ 20% 时弹一条 5 秒低电量提醒；回到 25% 以上后重新武装，不会反复打扰。
 - 与官方 HECATE 客户端可同时运行（各自打开设备句柄，偶发被抢占靠重试兜底）。
@@ -37,10 +37,10 @@ NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G �
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/HecateBatteryPlugin.cs` | 插件入口：组件注册、5 秒查询调度、低电量提醒、样式切换、生命周期 |
+| `src/HecateBatteryPlugin.cs` | 插件入口：组件注册、模式化查询调度、低电量提醒、样式切换、生命周期 |
 | `src/Hardware/HecateDeviceNotifications.cs` | 接收器 HID 接口到达/移除通知，仅触发后台重查 |
 | `src/Core/BatterySnapshot.cs` | 链路状态与不可变电量快照（跨线程交接） |
-| `src/Core/PluginSettings.cs` | 组件样式枚举与 `%APPDATA%` 设置持久化（失败安全） |
+| `src/Core/PluginSettings.cs` | 组件样式、查询模式与 `%APPDATA%` 设置持久化（失败安全） |
 | `src/Hardware/NativeMethods.cs` | Win32 P/Invoke 声明（kernel32 / setupapi / hid） |
 | `src/Hardware/HecateHid.cs` | HID 设备枚举、查询报文、回包校验与解析 |
 | `src/Rendering/PluginFont.cs` | 从宿主取得当前字体（不缓存、不释放） |
@@ -55,13 +55,14 @@ NotchPeninsula 的 HECATE G3 MAX 耳机电量插件，把「G3 MAX 通过 2.4G �
 
 项目当前面向 `net10.0-windows10.0.19041.0`。项目文件位于仓库根目录，通过相对路径引用同级的 `NotchPeninsula` 宿主源码工程，因此单独检出本仓库并不能解析完整的编译引用。当前仓库没有包含 CI 构建工作流，预编译产物位于 `releases/` 目录；远程构建所需的目录布局、依赖和注意事项见 [AI_DEVELOPMENT.md](AI_DEVELOPMENT.md)。
 
-本插件当前适配的宿主为 **NotchPeninsula 正式版 2.1.0**（GitHub release [NPS-v2.1.0](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.1.0)，对应 tag `NPS-v2.1.0`）。更新宿主兼容性前，请以该 tag 的宿主源码和插件 API 文档为准，不要默认 `main` 分支与已发布版本一致：
+本插件 1.5.0 按用户指定以 **NotchPeninsula 正式版 2.2.3** 构建（对应 tag `NPS-v2.2.3`）。更新宿主兼容性前，请以对应 tag 的宿主源码和插件 API 文档为准，不要默认 `main` 分支与已发布版本一致：
 
 - [NotchPeninsula 宿主仓库](https://github.com/GEORGEWWWU/NotchPeninsula)
-- [NPS-v2.1.0 的插件开发 API 文档](https://github.com/GEORGEWWWU/NotchPeninsula/blob/NPS-v2.1.0/NPS_PluginsAPI.md)
+- [NPS-v2.2.3 的插件开发 API 文档](https://github.com/GEORGEWWWU/NotchPeninsula/blob/NPS-v2.2.3/NPS_PluginsAPI.md)
 
 ## 版本记录
 
+- **1.5.0**：新增普通/增强查询模式，默认普通模式（30 秒），增强模式保持 1.4.0 的 5 秒轮询和设备通知；模式选择持久化，并在详情页提示增强模式可能伴随异常连接播报，关联原因尚未证实。构建目标为 NotchPeninsula 2.2.3。
 - **1.4.0**：查询周期缩短至协议建议的 5 秒下限；监听目标接收器 HID 接口的到达/移除通知，在两次定时查询之间提前安排重查。事件与定时请求合并、单次查询串行执行，自动查询起点至少间隔 5 秒；设备通知不可用时仍按周期查询。连接状态仍以合法 HID 状态帧的链路标志为准，Windows 设备事件不直接代表耳机在线或离线。
 - **1.3.0**：适配宿主 2.1.0 框架更新，折叠态组件从老协议 `MeasureWidth` 迁移到 **AutoWidth 协议**（`IAutoWidthWidget`）：`Layout` 用 `WidgetKit` 定宽盒子描述「耳机剪影 + 间距 + 电池」，宽度改由宿主按统一口径测量（内容向上取整 + 两侧 1px 留白），`Draw` 改用 `WidgetKit.ContentRect` 取内容区；耳机关机/超出范围时 `Layout` 返回 `null`（0 宽）自动隐藏，语义与原 `MeasureWidth` 返回 0 一致。组件宽度本就恒定，`WidthVaries` 保持默认 `false`。同时移除 `FontConfig.Changed` 订阅（2.1.0 起宿主在换字体时自行重测插件宽度，插件无需代劳）。
 - **1.2.0**：组件视觉重构并新增三种可选样式。岛上组件改为「左侧耳机剪影 + 右侧电池」，电量数字显示在电池内部，宽度恒定不随数字抖动；详情页新增「组件样式」区，可在**经典描边**（白描边电池）/ **彩色胶囊**（强调色描边 + 内衬染色）/ **极简细框**（常态半透明线框，低调不抢眼）之间切换，选择持久化到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`，重启保留。

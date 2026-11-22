@@ -53,18 +53,18 @@
 ## 项目与宿主
 
 - 插件 ID：`com.snow.hecatebattery`
-- 当前插件版本：`1.4.0`
+- 当前插件版本：`1.5.0`
 - 目标框架：`net10.0-windows10.0.19041.0`（必须与宿主一致）
 - 插件入口：`NPS.HecateBattery.HecateBatteryPlugin`（public，实现 `INotchPlugin`）
 - 宿主 API 命名空间：`NotchPeninsula.Plugins`；字体与日志在 `NotchPeninsula`（`FontConfig` / `Logger`，非冻结契约，全部 try/catch 包裹）
-- 目标宿主版本：**NotchPeninsula 正式版 2.1.0**（GitHub tag `NPS-v2.1.0`，tag 发布于 2026-10-24）。
+- 目标宿主版本：**NotchPeninsula 正式版 2.2.3**（GitHub tag `NPS-v2.2.3`，本次构建按用户指定固定到此版本）。
 
-⚠️ **必须按 tag 拉取宿主源码，不要用 `main`**：`main` 是未发布的开发版，API 可能继续演进；用非目标 tag 的源码编出的 DLL 放进正式版可能加载失败。2.1.0 的框架更新是把 AutoWidth 协议转正：`IAutoWidthWidget`、`WidgetKit`（`Text`/`Icon`/`Gap`/`Row`/`Stack`/`Min`、`Typeface`、`ContentRect`）与 `IPluginHost.GetSlotBudget` 已是正式 API；老协议 `MeasureWidth` 仍被兼容，但新代码应走 AutoWidth。本插件 1.3.0 起已迁移到 `IAutoWidthWidget`。
+⚠️ **必须按目标 tag 拉取宿主源码，不要用 `main`**：`main` 是未发布的开发版，API 可能继续演进；用非目标 tag 的源码编出的 DLL 放进正式版可能加载失败。2.1.0 起宿主正式支持 AutoWidth：`IAutoWidthWidget`、`WidgetKit` 与 `IPluginHost.GetSlotBudget`；本插件 1.3.0 起已迁移到 `IAutoWidthWidget`，并以 2.2.3 tag 验证构建。
 
 官方参考：
 
 - [NotchPeninsula 仓库](https://github.com/GEORGEWWWU/NotchPeninsula)
-- [NPS-v2.1.0 tag](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.1.0)
+- [NPS-v2.2.3 tag](https://github.com/GEORGEWWWU/NotchPeninsula/releases/tag/NPS-v2.2.3)
 - 该 tag 内的 `Plugin/PluginApi.cs`、`Plugin/WidgetKit.cs` 与根目录 `NPS_PluginsAPI.md` 是插件 API 的唯一权威来源。
 - 若目标版本有对应 tag，应优先使用该 tag 的 API 文档和宿主源码，不要默认 `main` 与已发布版本完全一致。宿主发布新版本后，先 diff 新 tag 的 `PluginApi.cs` 与 `WidgetKit.cs`，确认本仓库用到的成员没有改名/删除，再决定是否重编。
 
@@ -98,9 +98,9 @@ NPS.HecateBattery/
 
 ### `src/HecateBatteryPlugin.cs`
 
-实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 读回样式、注册组件、挂 `ScheduleRefresh(5s)` 定时器、注册 HID 接口通知，并投递一次初始查询到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。定时与设备事件请求在锁内合并，自动查询起点至少间隔 5 秒；手动刷新沿用原有即时请求语义，查询进行中可丢弃。查询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。`SetWidgetStyle` 处理详情页的样式切换：写持久化 + `InvalidateWidgetLayout`，样式不变时直接返回。
+实现 `INotchPlugin` 和 `IDisposable`。`Initialize` 读回样式与查询模式，注册组件，并按模式挂刷新定时器；普通模式每 30 秒查询且不注册设备通知，增强模式每 5 秒查询并注册 HID 接口通知。初始查询投递到线程池（**不在 Initialize 里做 HID I/O**，最坏 1.5 s）。自动查询起点至少间隔当前模式周期；手动刷新沿用原有即时请求语义。查询结果写入不可变 `BatterySnapshot` 快照（`Volatile.Read/Write` 交接），状态或电量变化时调 `InvalidateWidgetLayout` 让宿主重测宽度。详情页模式与样式切换共用持久化设置文件。
 
-失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏（`Layout` 返回 `null`，宿主按 0 宽处理：不分配空间、不绘制、不注册命中区），不走防抖，也绝不显示 0%；开机重连后下一次查询（通常 ≤ 5 s 加查询耗时）自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）；`-1`（设备不存在）显示「未连接」，`-2`（设备在、无响应）显示「设备无响应」。日志用 `_lastLoggedState` 去重，避免每 5 秒刷屏。
+失败语义：`-3`（收到合法状态帧且 `byte[5]==0x00`，即耳机已关机/超出 2.4G 范围）是**明确状态**，立即切换到 `Offline`——岛上组件自动隐藏，不走防抖，也绝不显示 0%；开机重连后下一周期自动恢复显示。其余失败连续 2 次才把界面切到 `--`（避免偶发超时闪屏）。日志按状态去重。
 
 低电量提醒：`level <= 20` 且比上次提醒值低 4 以上时 `PostReminder` 一条 5 秒提醒；回到 `> 25` 后重置。
 
@@ -110,7 +110,7 @@ NPS.HecateBattery/
 
 ### `src/Core/PluginSettings.cs`
 
-`WidgetStyle` 枚举（Classic / Capsule / Minimal）与 `SettingsStore`。样式持久化落到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`（System.Text.Json 单字段，读写全部 try/catch，任何异常回落默认 Classic，绝不影响电量显示），不依赖宿主的 `GetSetting`/`SetSetting`，读写失败也不影响电量显示。`Load` 只在 `Initialize` 调一次，`Save` 只在样式实际变化时调。
+`WidgetStyle` 枚举（Classic / Capsule / Minimal）、`PollingMode`（Normal / Enhanced）与 `SettingsStore`。两项设置共同持久化到 `%APPDATA%\NotchPeninsula\plugins\com.snow.hecatebattery\settings.json`；旧设置没有 `PollingMode` 字段时默认 Normal，读写异常安全回落默认值。
 
 ### `src/Hardware/NativeMethods.cs` 与 `src/Hardware/HecateHid.cs`
 
@@ -118,7 +118,7 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 
 `HecateHid.Poll` 返回值约定：`0..100` 成功（耳机在线）；`-1` 设备不存在；`-2` 设备在但无有效回包；`-3` 收到合法状态帧但 `byte[5]==0x00`（耳机已关机/超出 2.4G 范围，此时 `byte[6]` 不是电量）。查询/回包报文、校验规则（含 `report[5]` 链路标志）、时序参数（读窗 300 ms、重试 4×100 ms、轮询 ≥ 5 s）**一律以 `docs/G3MAX_BATTERY_PROTOCOL.md` 为准**，不要凭记忆改动协议常量。
 
-`HecateDeviceNotifications` 用 `CM_Register_Notification` 监听 HID 类设备接口，只处理目标 VID/PID 的 `col03` 到达/移除事件。回调只提交刷新请求，不做 HID I/O；接收器可能在耳机关机时短暂重枚举，而开机不产生设备事件，所以事件不能直接改变 `LinkState`。注册失败时继续使用 5 秒定时查询；`Dispose` 注销通知并停止延迟刷新定时器。
+增强模式用 `HecateDeviceNotifications` 监听 HID 类设备接口，只处理目标 VID/PID 的 `col03` 到达/移除事件；普通模式不注册。回调只提交刷新请求，不做 HID I/O；设备事件不能直接改变 `LinkState`。注册失败时增强模式继续使用 5 秒定时查询。模式切换会使旧定时与通知回调失效；注销通知不在刷新锁内进行。
 
 状态帧解析统一走 `HecateHid.TryParseStatusReport`（纯函数，不碰 Win32），它对离线帧有回归测试覆盖（`.ai-work/parse-test/` 本地工程链接源码运行，不入库）：核心断言是「离线帧绝不能被解析成在线 + 0% 电量」，改动解析逻辑前先跑一遍。
 
@@ -156,18 +156,18 @@ Win32 P/Invoke 与协议实现。⚠️ `OVERLAPPED.Internal/InternalHigh` 必�
 
 ## 项目引用与依赖
 
-`NPS.HecateBattery.csproj` 通过相对路径引用 `..\NotchPeninsula\NotchPeninsula.csproj`，并设置 `Private="false"`。SkiaSharp 固定 2.88.8（与宿主 v2.1.0 一致）且 `ExcludeAssets="runtime"`，仅作编译引用，运行时由宿主提供；插件不随带任何宿主已有程序集。
+`NPS.HecateBattery.csproj` 通过相对路径引用 `..\NotchPeninsula\NotchPeninsula.csproj`，并设置 `Private="false"`。SkiaSharp 固定 2.88.8（由宿主运行时提供）且 `ExcludeAssets="runtime"`，仅作编译引用；插件不随带任何宿主已有程序集。
 
 如果远程环境需要构建，两个仓库必须按相对路径并列放置，不能把插件源码放进宿主仓库目录（宿主项目的默认源文件通配可能把插件代码一并编译进宿主）：
 
 ```text
 工作目录/
-├── NotchPeninsula/        # 按 tag NPS-v2.1.0 克隆的宿主源码
+├── NotchPeninsula/        # 按目标 tag NPS-v2.2.3 克隆的宿主源码
 └── NPS.HecateBattery/      # 本插件仓库
 ```
 
 ```bash
-git clone --branch NPS-v2.1.0 --depth 1 https://github.com/GEORGEWWWU/NotchPeninsula.git
+git clone --branch NPS-v2.2.3 --depth 1 https://github.com/GEORGEWWWU/NotchPeninsula.git
 ```
 
 在云电脑、托管 Windows runner 或其他所选远程开发平台中，先确认或安装 .NET 10 SDK，再进入插件目录构建。`InstallToHostPlugins` 目标会把 DLL 复制到宿主输出目录的 `plugins` 文件夹。若当前环境是用户本机，不要运行下面的构建命令；若当前环境是云电脑或其他授权的远程环境，则应运行并验证构建结果：

@@ -1,5 +1,5 @@
 // HecateDetailPage.cs
-// 右键展开的详情页（固定设计坐标 340×148，绘制时按 rect 等比缩放，
+// 右键展开的详情页（固定设计坐标 340×238，绘制时按 rect 等比缩放，
 // 宿主展开动画期间 rect 是插值尺寸，不能拿它当排版基准）。
 // 内容：标题/副标题、大号电量、状态文案、进度条、组件样式切换、上次更新时间与刷新按钮。
 using System;
@@ -11,11 +11,13 @@ namespace NPS.HecateBattery;
 internal sealed class HecateDetailPage : IDetailPage
 {
     private const float DesignW = 340f;
-    private const float DesignH = 148f;
+    private const float DesignH = 238f;
     private static readonly SKRect RefreshButton = new(258f, 16f, 326f, 42f);
-    private static readonly SKRect StyleClassicButton = new(86f, 104f, 160f, 122f);
-    private static readonly SKRect StyleCapsuleButton = new(168f, 104f, 242f, 122f);
-    private static readonly SKRect StyleMinimalButton = new(250f, 104f, 322f, 122f);
+    private static readonly SKRect PollNormalButton = new(106f, 108f, 208f, 130f);
+    private static readonly SKRect PollEnhancedButton = new(216f, 108f, 322f, 130f);
+    private static readonly SKRect StyleClassicButton = new(86f, 184f, 160f, 202f);
+    private static readonly SKRect StyleCapsuleButton = new(168f, 184f, 242f, 202f);
+    private static readonly SKRect StyleMinimalButton = new(250f, 184f, 322f, 202f);
 
     private readonly HecateBatteryPlugin _plugin;
 
@@ -58,7 +60,7 @@ internal sealed class HecateDetailPage : IDetailPage
         string status = s.State switch
         {
             LinkState.Reading => "正在读取…",
-            LinkState.Ok => "已连接 · 刷新周期 " + HecateBatteryPlugin.PollSeconds + " 秒",
+            LinkState.Ok => "已连接 · " + (_plugin.PollMode == PollingMode.Enhanced ? "增强" : "普通") + "模式 · " + _plugin.PollSeconds + " 秒",
             LinkState.Offline => "耳机已关机或超出范围 · 开机重连后岛上组件自动恢复显示",
             LinkState.Disconnected => "未连接：请确认接收器已插入、耳机已开机",
             _ => "设备无响应：可能被其他程序短暂占用",
@@ -90,8 +92,18 @@ internal sealed class HecateDetailPage : IDetailPage
             }
         }
 
+        DrawText(canvas, "查询模式", 18f, 122f, 10.5f, false, subColor);
+        DrawStyleButton(canvas, PollNormalButton, "普通 30 秒",
+            _plugin.PollMode == PollingMode.Normal, mainColor, subColor, alpha);
+        DrawStyleButton(canvas, PollEnhancedButton, "增强 5 秒",
+            _plugin.PollMode == PollingMode.Enhanced, mainColor, subColor, alpha);
+        DrawText(canvas, "增强模式查询更频繁，可能触发异常连接播报。",
+            18f, 148f, 10f, false, subColor);
+        DrawText(canvas, "关联原因尚未证实。",
+            18f, 161f, 10f, false, subColor);
+
         // 组件样式切换（A 经典描边 / B 彩色胶囊 / C 极简细框），点击即时生效并持久化。
-        DrawText(canvas, "组件样式", 18f, 117f, 10.5f, false, subColor);
+        DrawText(canvas, "组件样式", 18f, 193f, 10.5f, false, subColor);
         DrawStyleButton(canvas, StyleClassicButton, "经典描边",
             _plugin.Style == WidgetStyle.Classic, mainColor, subColor, alpha);
         DrawStyleButton(canvas, StyleCapsuleButton, "彩色胶囊",
@@ -108,7 +120,7 @@ internal sealed class HecateDetailPage : IDetailPage
         }
         DrawText(canvas,
             "上次更新 " + when + " · 左键点击岛上的组件可立即刷新",
-            18f, 140f, 10.5f, false, subColor);
+            18f, 225f, 10.5f, false, subColor);
 
         using (var border = new SKPaint
         {
@@ -142,6 +154,8 @@ internal sealed class HecateDetailPage : IDetailPage
         float sx = x * (DesignW / rect.Width);
         float sy = y * (DesignH / rect.Height);
         if (RefreshButton.Contains(sx, sy)) return new WidgetHit("refresh");
+        if (PollNormalButton.Contains(sx, sy)) return new WidgetHit("poll.normal");
+        if (PollEnhancedButton.Contains(sx, sy)) return new WidgetHit("poll.enhanced");
         if (StyleClassicButton.Contains(sx, sy)) return new WidgetHit("style.classic");
         if (StyleCapsuleButton.Contains(sx, sy)) return new WidgetHit("style.capsule");
         if (StyleMinimalButton.Contains(sx, sy)) return new WidgetHit("style.minimal");
@@ -163,6 +177,12 @@ internal sealed class HecateDetailPage : IDetailPage
                 break;
             case "style.minimal":
                 _plugin.SetWidgetStyle(WidgetStyle.Minimal);
+                break;
+            case "poll.normal":
+                _plugin.SetPollingMode(PollingMode.Normal);
+                break;
+            case "poll.enhanced":
+                _plugin.SetPollingMode(PollingMode.Enhanced);
                 break;
         }
     }
