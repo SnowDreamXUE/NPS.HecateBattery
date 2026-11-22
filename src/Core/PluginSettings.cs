@@ -21,9 +21,16 @@ internal enum WidgetStyle
     Minimal,
 }
 
+internal enum PollingMode
+{
+    Normal,
+    Enhanced,
+}
+
 internal sealed class PluginSettings
 {
     public string WidgetStyle { get; set; } = "classic";
+    public string PollingMode { get; set; } = "normal";
 }
 
 internal static class SettingsStore
@@ -57,7 +64,25 @@ internal static class SettingsStore
         }
     }
 
-    public static void Save(WidgetStyle style)
+    public static PollingMode LoadPollingMode()
+    {
+        try
+        {
+            lock (Gate)
+            {
+                if (!System.IO.File.Exists(SettingsPath)) return PollingMode.Normal;
+                PluginSettings? s = JsonSerializer.Deserialize<PluginSettings>(
+                    System.IO.File.ReadAllText(SettingsPath));
+                return s?.PollingMode == "enhanced" ? PollingMode.Enhanced : PollingMode.Normal;
+            }
+        }
+        catch
+        {
+            return PollingMode.Normal;
+        }
+    }
+
+    public static void Save(WidgetStyle style, PollingMode pollingMode)
     {
         try
         {
@@ -71,9 +96,10 @@ internal static class SettingsStore
                     WidgetStyle.Minimal => "minimal",
                     _ => "classic",
                 };
+                string mode = pollingMode == PollingMode.Enhanced ? "enhanced" : "normal";
                 System.IO.File.WriteAllText(
                     SettingsPath,
-                    JsonSerializer.Serialize(new PluginSettings { WidgetStyle = name }));
+                    JsonSerializer.Serialize(new PluginSettings { WidgetStyle = name, PollingMode = mode }));
             }
         }
         catch
